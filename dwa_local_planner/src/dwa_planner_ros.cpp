@@ -87,6 +87,9 @@ namespace dwa_local_planner {
 
       // update dwa specific configuration
       dp_->reconfigure(config);
+
+      // Update pivot rotation controller
+      pivotRotationController_.setParameters(config.pivot_turn_angle, config.yaw_goal_tolerance, config.path_heading_distance);
   }
 
   DWAPlannerROS::DWAPlannerROS() : initialized_(false),
@@ -146,6 +149,7 @@ namespace dwa_local_planner {
     }
     //when we get a new plan, we also want to clear any latch we may have on goal tolerances
     latchedStopRotateController_.resetLatching();
+    pivotRotationController_.reset();
 
     ROS_INFO("Got new plan");
     return dp_->setPlan(orig_global_plan);
@@ -304,15 +308,34 @@ namespace dwa_local_planner {
           current_pose_,
           boost::bind(&DWAPlanner::checkTrajectory, dp_, _1, _2, _3));
     } else {
-      bool isOk = dwaComputeVelocityCommands(current_pose_, cmd_vel);
-      if (isOk) {
-        publishGlobalPlan(transformed_plan);
-      } else {
-        ROS_WARN_NAMED("dwa_local_planner", "DWA planner failed to produce path.");
+      // Check for pivot controller action
+      std::vector<Eigen::Vector2f> transformed_heading_path;
+      bool isRunNeeded = pivotRotationController_.isRunNeeded(
+                             current_pose_, transformed_plan,
+                             planner_util_, odom_helper_, transformed_heading_path);
+      // Publish global and global heading plans
+      publishGlobalPlan(transformed_plan);
+      if (isRunNeeded)
+      {
+        ROS_DEBUG_NAMED("eyeguide_local_planner", "Running pivot rotation controller.");
+        // Publish an empty local & global plan
         std::vector<geometry_msgs::PoseStamped> empty_plan;
-        publishGlobalPlan(empty_plan);
+        publishLocalPlan(empty_plan);
+        // Run PivotRotationController
+        return pivotRotationController_.computeVelocityCommand(dp_->getSimPeriod(), cmd_vel);
       }
-      return isOk;
+      // Continue with Frenet trajectory planner
+      else {
+        bool isOk = dwaComputeVelocityCommands(current_pose_, cmd_vel);
+        if (isOk) {
+          publishGlobalPlan(transformed_plan);
+        } else {
+          ROS_WARN_NAMED("dwa_local_planner", "DWA planner failed to produce path.");
+          std::vector<geometry_msgs::PoseStamped> empty_plan;
+          publishGlobalPlan(empty_plan);
+        }
+        return isOk;
+      }
     }
   }
 

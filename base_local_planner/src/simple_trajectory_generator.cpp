@@ -105,14 +105,23 @@ void SimpleTrajectoryGenerator::initialise(
       min_vel[2] = std::max(min_vel_th, vel[2] - acc_lim[2] * sim_time_);
     } else {
       // with dwa do not accelerate beyond the first step, we only sample within velocities we reach in sim_period
-      max_vel[0] = std::min(max_vel_x, vel[0] + acc_lim[0] * sim_period_);
-      max_vel[1] = std::min(max_vel_y, vel[1] + acc_lim[1] * sim_period_);
-      max_vel[2] = std::min(max_vel_th, vel[2] + acc_lim[2] * sim_period_);
+      max_vel[0] = std::min(max_vel_x, std::max(min_vel_x, vel[0] + acc_lim[0] * sim_period_));
+      max_vel[1] = std::min(max_vel_y, std::max(min_vel_y, vel[1] + acc_lim[1] * sim_period_));
+      max_vel[2] = std::min(max_vel_th, std::max(min_vel_th, vel[2] + acc_lim[2] * sim_period_));
 
-      min_vel[0] = std::max(min_vel_x, vel[0] - acc_lim[0] * sim_period_);
-      min_vel[1] = std::max(min_vel_y, vel[1] - acc_lim[1] * sim_period_);
-      min_vel[2] = std::max(min_vel_th, vel[2] - acc_lim[2] * sim_period_);
+      min_vel[0] = std::min(max_vel_x, std::max(min_vel_x, vel[0] - acc_lim[0] * sim_period_));
+      min_vel[1] = std::min(max_vel_y, std::max(min_vel_y, vel[1] - acc_lim[1] * sim_period_));
+      min_vel[2] = std::min(max_vel_th, std::max(min_vel_th, vel[2] - acc_lim[2] * sim_period_));
     }
+
+	// Make [min, max] velocities include dead-zone (-min_vel_trans, min_vel_trans)
+	// once overlapping, so that we're not stuck in it and can switch direction.
+	if (limits_->min_vel_trans > 0.0) {
+	  if (min_vel[0] < limits_->min_vel_trans)
+		min_vel[0] = std::min(min_vel[0], -(float)limits_->min_vel_trans);
+	  if (max_vel[0] > -limits_->min_vel_trans)
+		max_vel[0] = std::max(max_vel[0], (float)limits_->min_vel_trans);
+	}
 
     Eigen::Vector3f vel_samp = Eigen::Vector3f::Zero();
     VelocityIterator x_it(min_vel[0], max_vel[0], vsamples[0]);

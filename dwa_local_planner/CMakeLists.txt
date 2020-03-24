@@ -46,7 +46,7 @@ catkin_package(
         tf2_ros
 )
 
-add_library(dwa_local_planner src/dwa_planner.cpp src/dwa_planner_ros.cpp)
+add_library(dwa_local_planner src/dwa_planner.cpp src/dwa_planner_ros.cpp src/pivot_rotation_controller.cpp src/path_functions.cpp)
 add_dependencies(dwa_local_planner ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(dwa_local_planner ${catkin_LIBRARIES})
 

@@ -56,6 +56,7 @@
 #include <base_local_planner/odometry_helper_ros.h>
 
 #include <dwa_local_planner/dwa_planner.h>
+#include <eyeguide_local_planner/pivot_rotation_controller.h>
 
 namespace dwa_local_planner {
   /**
@@ -147,6 +148,7 @@ namespace dwa_local_planner {
       geometry_msgs::PoseStamped current_pose_;
 
       base_local_planner::LatchedStopRotateController latchedStopRotateController_;
+	  eyeguide_local_planner::PivotRotationController pivotRotationController_;
 
 
       bool initialized_;
