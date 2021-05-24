@@ -38,6 +38,7 @@
 #include <move_base/move_base.h>
 #include <move_base_msgs/RecoveryStatus.h>
 #include <cmath>
+#include <numeric>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/thread.hpp>
@@ -45,6 +46,8 @@
 #include <geometry_msgs/Twist.h>
 
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+
+#include <move_base/FeedbackGetPlan.h>
 
 namespace move_base {
 
@@ -96,6 +99,10 @@ namespace move_base {
     vel_pub_ = nh.advertise<geometry_msgs::Twist>("cmd_vel", 1);
     current_goal_pub_ = private_nh.advertise<geometry_msgs::PoseStamped>("current_goal", 0 );
 
+    //for robot velocity
+    odom_sub_ = nh.subscribe<nav_msgs::Odometry>("robot_localization/odometry/odom", 100, boost::bind(&MoveBase::odomCB, this, _1));
+    average_velocity_ = MIN_VELOCITY;
+
     ros::NodeHandle action_nh("move_base");
     action_goal_pub_ = action_nh.advertise<move_base_msgs::MoveBaseActionGoal>("goal", 1);
     recovery_status_pub_= action_nh.advertise<move_base_msgs::RecoveryStatus>("recovery_status", 1);
@@ -105,6 +112,8 @@ namespace move_base {
     //like nav_view and rviz
     ros::NodeHandle simple_nh("move_base_simple");
     goal_sub_ = simple_nh.subscribe<geometry_msgs::PoseStamped>("goal", 1, boost::bind(&MoveBase::goalCB, this, _1));
+
+    feedback_get_plan_pub_ = simple_nh.advertise<move_base::FeedbackGetPlan>("feedback", 1);
 
     //we'll assume the radius of the robot to be consistent with what's specified for the costmaps
     private_nh.param("local_costmap/inscribed_radius", inscribed_radius_, 0.325);
@@ -800,6 +809,66 @@ namespace move_base {
     return hypot(p1.pose.position.x - p2.pose.position.x, p1.pose.position.y - p2.pose.position.y);
   }
 
+  // calculate the average velocity from odom topic based on velocities_.size() samples. 
+  void MoveBase::odomCB(const nav_msgs::Odometry::ConstPtr& msg)
+  {
+    static uint32_t cnt = 0;
+    uint32_t index = cnt % velocities_.size();
+    cnt++;
+    velocities_[index] = std::abs(msg->twist.twist.linear.x);
+
+    if(index == velocities_.size() -1)
+    {
+      double sum_velocites{std::accumulate(velocities_.begin(), velocities_.end(), 0.0)};
+      double average_vel = sum_velocites / velocities_.size();
+      if(average_vel < MIN_VELOCITY)
+      {
+        average_velocity_ =  MIN_VELOCITY;
+      }
+    }
+
+  }
+  
+  //publish feedback get plan based on latest_plan.Called in context of executeCycle.
+  void MoveBase::publishFeedbackGetPlan(const geometry_msgs::PoseStamped& current_position, const geometry_msgs::PoseStamped& goal)
+  {
+    if(latest_plan_->empty())
+    {
+      return;
+    }
+    std::vector<geometry_msgs::PoseStamped> plan;
+    boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
+    plan = *latest_plan_;
+    lock.unlock();
+    //find the closest pose to current position, based on straigth line distance.
+    std::vector<double> dist_vec;
+    for(auto& p: plan)
+    {
+      dist_vec.push_back(distance(p, current_position));
+    }
+
+    auto minIndex = 0;
+    auto minDistance = std::min_element(dist_vec.begin(), dist_vec.end()); 
+    if (minDistance != dist_vec.end())
+    {
+      minIndex = std::distance(dist_vec.begin(), minDistance);
+    }
+    //calculate distance to the goal.
+    double dist = distance(plan[minIndex], current_position);
+    for(uint32_t idx = minIndex; idx < plan.size() - 1; ++idx)
+    {
+      dist += distance(plan[idx], plan[idx + 1]);
+    }
+
+    move_base::FeedbackGetPlan msg;
+    msg.current = current_position;
+    msg.goal = goal;
+    msg.dist = dist;
+    msg.time = dist/average_velocity_;
+    feedback_get_plan_pub_.publish(msg);
+
+  }
+
   bool MoveBase::executeCycle(geometry_msgs::PoseStamped& goal, std::vector<geometry_msgs::PoseStamped>& global_plan){
     boost::recursive_mutex::scoped_lock ecl(configuration_mutex_);
     //we need to be able to publish velocity commands
@@ -814,6 +883,8 @@ namespace move_base {
     move_base_msgs::MoveBaseFeedback feedback;
     feedback.base_position = current_position;
     as_->publishFeedback(feedback);
+    //publish feedback get plan
+    publishFeedbackGetPlan(current_position, goal);
 
     //check to see if we've moved far enough to reset our oscillation timeout
     if(distance(current_position, oscillation_pose_) >= oscillation_distance_)

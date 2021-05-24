@@ -52,6 +52,7 @@
 #include <costmap_2d/costmap_2d_ros.h>
 #include <costmap_2d/costmap_2d.h>
 #include <nav_msgs/GetPlan.h>
+#include <nav_msgs/Odometry.h>
 
 #include <pluginlib/class_loader.hpp>
 #include <std_srvs/Empty.h>
@@ -169,7 +170,11 @@ namespace move_base {
       double distance(const geometry_msgs::PoseStamped& p1, const geometry_msgs::PoseStamped& p2);
 
       geometry_msgs::PoseStamped goalToGlobalFrame(const geometry_msgs::PoseStamped& goal_pose_msg);
-
+      
+      void publishFeedbackGetPlan(const geometry_msgs::PoseStamped& current_position, const geometry_msgs::PoseStamped& goal);
+      
+      void odomCB(const nav_msgs::Odometry::ConstPtr& msg);
+      
       /**
        * @brief This is used to wake the planner at periodic intervals.
        */
@@ -189,14 +194,19 @@ namespace move_base {
       std::vector<std::string> recovery_behavior_names_;
       unsigned int recovery_index_;
 
+      //for average velocity calculation 
+      std::array<double, 100> velocities_;
+      std::atomic<double> average_velocity_;
+      static constexpr double MIN_VELOCITY = 0.5;
+
       geometry_msgs::PoseStamped global_pose_;
       double planner_frequency_, controller_frequency_, inscribed_radius_, circumscribed_radius_;
       double planner_patience_, controller_patience_;
       int32_t max_planning_retries_;
       uint32_t planning_retries_;
       double conservative_reset_dist_, clearing_radius_;
-      ros::Publisher current_goal_pub_, vel_pub_, action_goal_pub_, recovery_status_pub_;
-      ros::Subscriber goal_sub_;
+      ros::Publisher current_goal_pub_, vel_pub_, action_goal_pub_, recovery_status_pub_, feedback_get_plan_pub_;
+      ros::Subscriber goal_sub_, odom_sub_;
       ros::ServiceServer make_plan_srv_, clear_costmaps_srv_;
       bool shutdown_costmaps_, clearing_rotation_allowed_, recovery_behavior_enabled_;
       bool make_plan_clear_costmap_, make_plan_add_unreachable_goal_;
