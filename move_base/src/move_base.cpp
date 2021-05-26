@@ -580,8 +580,8 @@ namespace move_base {
 
     //publish feedback
     move_base_msgs::Feedback msg;
-    msg.dist = dist;
-    msg.time = dist/average_vel;
+    msg.dist_to_goal = dist;
+    msg.time_to_goal = dist/average_vel;
     feedback_distance_pub_.publish(msg);
 
     //save distance and time
