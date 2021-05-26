@@ -37,7 +37,10 @@
 *********************************************************************/
 #include <move_base/move_base.h>
 #include <move_base_msgs/RecoveryStatus.h>
+#include <move_base_msgs/Feedback.h>
 #include <cmath>
+
+#include <numeric>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/thread.hpp>
@@ -105,6 +108,8 @@ namespace move_base {
     //like nav_view and rviz
     ros::NodeHandle simple_nh("move_base_simple");
     goal_sub_ = simple_nh.subscribe<geometry_msgs::PoseStamped>("goal", 1, boost::bind(&MoveBase::goalCB, this, _1));
+
+    feedback_distance_pub_ = simple_nh.advertise<move_base_msgs::Feedback>("feedback", 1);
 
     //we'll assume the radius of the robot to be consistent with what's specified for the costmaps
     private_nh.param("local_costmap/inscribed_radius", inscribed_radius_, 0.325);
@@ -560,6 +565,86 @@ namespace move_base {
     return global_pose;
   }
 
+  //publish feedback based on latest_plan.Called in context of executeCycle.
+  void MoveBase::publishFeedback(const geometry_msgs::PoseStamped& current_position)
+  {
+    if(latest_plan_->empty())
+    {
+      return;
+    }
+    //calculate distance to goal from current position
+    double dist = calculateDistanceToGoal(current_position);
+    //calculate average velocity
+    ros::Time current_time = ros::Time::now();
+    double average_vel = calculateAverageVelocity(dist, current_time);
+
+    //publish feedback
+    move_base_msgs::Feedback msg;
+    msg.dist = dist;
+    msg.time = dist/average_vel;
+    feedback_distance_pub_.publish(msg);
+
+    //save distance and time
+    prev_dist_and_time_ = std::make_pair(dist, current_time);
+
+  }
+
+  //calculate distance from current position to the
+  double MoveBase::calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position)
+  {
+    std::vector<geometry_msgs::PoseStamped> plan;
+    boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
+    plan = *latest_plan_;
+    lock.unlock();
+    //find the closest pose to current position, based on straigth line distance.
+    std::vector<double> dist_vec;
+    for(auto& p: plan)
+    {
+      dist_vec.push_back(distance(p, current_position));
+    }
+
+    auto minIndex = 0;
+    auto minDistance = std::min_element(dist_vec.begin(), dist_vec.end()); 
+    if (minDistance != dist_vec.end())
+    {
+      minIndex = std::distance(dist_vec.begin(), minDistance);
+    }
+    //calculate distance to the goal.
+    double dist = distance(plan[minIndex], current_position);
+    for(uint32_t idx = minIndex; idx < plan.size() - 1; ++idx)
+    {
+      dist += distance(plan[idx], plan[idx + 1]);
+    }
+
+    return dist;
+  }
+
+  //calculate average velocity, based on delta distance and time duration
+  //and previous velocities
+  double MoveBase::calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
+  {
+    double average_vel = MIN_VELOCITY;
+    if(velocities_.empty())
+    {
+      velocities_.push_back(average_vel);
+    }
+    else
+    {
+      ros::Duration dtime = current_time - prev_dist_and_time_.second;
+      double velocity = abs(prev_dist_and_time_.first - dist_to_goal)/(dtime.toSec() ? dtime.toSec() : 1);
+      velocities_.push_back(velocity);
+
+      double sum_velocites{std::accumulate(velocities_.begin(), velocities_.end(), 0.0)};
+      average_vel = sum_velocites / velocities_.size();
+      if(average_vel < MIN_VELOCITY)
+      {
+        average_vel = MIN_VELOCITY;
+      }
+    }
+
+    return average_vel;
+  }
+
   void MoveBase::wakePlanner(const ros::TimerEvent& event)
   {
     // we have slept long enough for rate
@@ -814,6 +899,8 @@ namespace move_base {
     move_base_msgs::MoveBaseFeedback feedback;
     feedback.base_position = current_position;
     as_->publishFeedback(feedback);
+    //publish feedback
+    publishFeedback(current_position);
 
     //check to see if we've moved far enough to reset our oscillation timeout
     if(distance(current_position, oscillation_pose_) >= oscillation_distance_)
@@ -1162,6 +1249,9 @@ namespace move_base {
       planner_costmap_ros_->stop();
       controller_costmap_ros_->stop();
     }
+
+    //clean velocities for the new goal.
+    velocities_.clear();
   }
 
   bool MoveBase::getRobotPose(geometry_msgs::PoseStamped& global_pose, costmap_2d::Costmap2DROS* costmap)

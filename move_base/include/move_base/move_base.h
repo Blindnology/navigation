@@ -170,6 +170,12 @@ namespace move_base {
 
       geometry_msgs::PoseStamped goalToGlobalFrame(const geometry_msgs::PoseStamped& goal_pose_msg);
 
+      void publishFeedback(const geometry_msgs::PoseStamped& current_position);
+
+      double calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time);
+
+      double calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position);
+
       /**
        * @brief This is used to wake the planner at periodic intervals.
        */
@@ -189,13 +195,18 @@ namespace move_base {
       std::vector<std::string> recovery_behavior_names_;
       unsigned int recovery_index_;
 
+      //for average velocity calculation
+      std::pair<double, ros::Time> prev_dist_and_time_; 
+      std::vector<double> velocities_;
+      static constexpr double MIN_VELOCITY = 0.3;
+
       geometry_msgs::PoseStamped global_pose_;
       double planner_frequency_, controller_frequency_, inscribed_radius_, circumscribed_radius_;
       double planner_patience_, controller_patience_;
       int32_t max_planning_retries_;
       uint32_t planning_retries_;
       double conservative_reset_dist_, clearing_radius_;
-      ros::Publisher current_goal_pub_, vel_pub_, action_goal_pub_, recovery_status_pub_;
+      ros::Publisher current_goal_pub_, vel_pub_, action_goal_pub_, recovery_status_pub_, feedback_distance_pub_;
       ros::Subscriber goal_sub_;
       ros::ServiceServer make_plan_srv_, clear_costmaps_srv_;
       bool shutdown_costmaps_, clearing_rotation_allowed_, recovery_behavior_enabled_;
