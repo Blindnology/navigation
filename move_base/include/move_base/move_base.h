@@ -76,6 +76,40 @@ namespace move_base {
     OSCILLATION_R
   };
 
+  //Used to calculate distance, time and average velocity
+  struct FeedbackInfo
+  {
+      FeedbackInfo()
+      {
+        clear();
+      }
+
+      void clear()
+      {
+        velocity = MIN_VELOCITY;
+        is_set = false;
+      }
+
+      double getTime(double distance, double velocity)
+      {
+        double epsilon = 0.01;
+        if(fabs(velocity - 0.0) < epsilon)
+        {
+          velocity = MIN_VELOCITY;
+        }
+
+        return fabs(distance/velocity);
+      }
+
+      double dist_to_goal;
+      double velocity;
+      ros::Time time;
+      bool is_set;
+      //the value between(0,1)
+      static constexpr double WEIGHT_AVERAGE_VELOCITY_FACTOR = 0.9;
+      static constexpr double MIN_VELOCITY = 0.3;
+  };
+
   /**
    * @class MoveBase
    * @brief A class that uses the actionlib::ActionServer interface that moves the robot base to a goal location.
@@ -174,7 +208,7 @@ namespace move_base {
 
       double calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time);
 
-      double calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position);
+      std::pair<bool, double> calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position);
 
       /**
        * @brief This is used to wake the planner at periodic intervals.
@@ -195,10 +229,7 @@ namespace move_base {
       std::vector<std::string> recovery_behavior_names_;
       unsigned int recovery_index_;
 
-      //for average velocity calculation
-      std::pair<double, ros::Time> prev_dist_and_time_; 
-      std::vector<double> velocities_;
-      static constexpr double MIN_VELOCITY = 0.3;
+      FeedbackInfo prev_feedback_info_;
 
       geometry_msgs::PoseStamped global_pose_;
       double planner_frequency_, controller_frequency_, inscribed_radius_, circumscribed_radius_;

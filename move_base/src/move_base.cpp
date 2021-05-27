@@ -568,78 +568,82 @@ namespace move_base {
   //publish feedback based on latest_plan.Called in context of executeCycle.
   void MoveBase::publishFeedback(const geometry_msgs::PoseStamped& current_position)
   {
-    if(latest_plan_->empty())
+    //calculate distance to goal from current position
+    std::pair<bool, double> distance_info = calculateDistanceToGoal(current_position);
+    if(!distance_info.first)
     {
       return;
     }
-    //calculate distance to goal from current position
-    double dist = calculateDistanceToGoal(current_position);
+
     //calculate average velocity
     ros::Time current_time = ros::Time::now();
+    double dist = distance_info.second;
     double average_vel = calculateAverageVelocity(dist, current_time);
 
     //publish feedback
     move_base_msgs::Feedback msg;
     msg.dist_to_goal = dist;
-    msg.time_to_goal = dist/average_vel;
+    msg.time_to_goal = prev_feedback_info_.getTime(dist, average_vel);
     feedback_distance_pub_.publish(msg);
 
-    //save distance and time
-    prev_dist_and_time_ = std::make_pair(dist, current_time);
-
+    //save previous feedback info
+    prev_feedback_info_.time = current_time;
+    prev_feedback_info_.velocity = average_vel;
+    prev_feedback_info_.dist_to_goal = dist;
   }
 
-  //calculate distance from current position to the
-  double MoveBase::calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position)
+  ///calculate distance from closest pose to current position to the goal. 
+  //return pair.The first parameter is status(true/false).The second is a distance.
+  std::pair<bool, double> MoveBase::calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position)
   {
-    std::vector<geometry_msgs::PoseStamped> plan;
     boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
+    if(latest_plan_->empty())
+    {
+      return std::make_pair(false, 0.0);
+    }
+    std::vector<geometry_msgs::PoseStamped> plan;
     plan = *latest_plan_;
     lock.unlock();
     //find the closest pose to current position, based on straigth line distance.
-    std::vector<double> dist_vec;
-    for(auto& p: plan)
+    uint32_t min_index = 0;
+    double min_distance = distance(plan[0], current_position);
+    
+    for(uint32_t i = 1; i < plan.size(); ++i)
     {
-      dist_vec.push_back(distance(p, current_position));
+      double current_distance = distance(plan[i], current_position);
+      if(current_distance < min_distance)
+      {
+        min_distance = current_distance;
+        min_index = i;
+      }
     }
-
-    auto minIndex = 0;
-    auto minDistance = std::min_element(dist_vec.begin(), dist_vec.end()); 
-    if (minDistance != dist_vec.end())
-    {
-      minIndex = std::distance(dist_vec.begin(), minDistance);
-    }
-    //calculate distance to the goal.
-    double dist = distance(plan[minIndex], current_position);
-    for(uint32_t idx = minIndex; idx < plan.size() - 1; ++idx)
+    //calculate distance from closest pose to current position to the goal. 
+    double dist = 0.0;
+    for(uint32_t idx = min_index; idx < plan.size() - 1; ++idx)
     {
       dist += distance(plan[idx], plan[idx + 1]);
     }
 
-    return dist;
+    return std::make_pair(true, dist);
   }
 
-  //calculate average velocity, based on delta distance and time duration
-  //and previous velocities
+  //the calculation based on "exponentially weighted moving average" (EWMA).
+  //average velocity = factor * previous average velocity + (1-factor) * current velocity
+  //factor between (0,1)
   double MoveBase::calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
   {
-    double average_vel = MIN_VELOCITY;
-    if(velocities_.empty())
+    double average_vel = FeedbackInfo::MIN_VELOCITY;
+
+    if(prev_feedback_info_.is_set)
     {
-      velocities_.push_back(average_vel);
+      ros::Duration dtime = current_time - prev_feedback_info_.time;
+      double current_velocity = (prev_feedback_info_.dist_to_goal - dist_to_goal)/dtime.toSec();
+      average_vel = FeedbackInfo::WEIGHT_AVERAGE_VELOCITY_FACTOR * prev_feedback_info_.velocity +
+                         (1- FeedbackInfo::WEIGHT_AVERAGE_VELOCITY_FACTOR) * current_velocity;
     }
     else
     {
-      ros::Duration dtime = current_time - prev_dist_and_time_.second;
-      double velocity = abs(prev_dist_and_time_.first - dist_to_goal)/(dtime.toSec() ? dtime.toSec() : 1);
-      velocities_.push_back(velocity);
-
-      double sum_velocites{std::accumulate(velocities_.begin(), velocities_.end(), 0.0)};
-      average_vel = sum_velocites / velocities_.size();
-      if(average_vel < MIN_VELOCITY)
-      {
-        average_vel = MIN_VELOCITY;
-      }
+      prev_feedback_info_.is_set = true;
     }
 
     return average_vel;
@@ -1250,8 +1254,8 @@ namespace move_base {
       controller_costmap_ros_->stop();
     }
 
-    //clean velocities for the new goal.
-    velocities_.clear();
+    //clean previous feedback.
+    prev_feedback_info_.clear();
   }
 
   bool MoveBase::getRobotPose(geometry_msgs::PoseStamped& global_pose, costmap_2d::Costmap2DROS* costmap)
