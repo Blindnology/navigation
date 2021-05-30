@@ -110,6 +110,15 @@ namespace move_base {
     goal_sub_ = simple_nh.subscribe<geometry_msgs::PoseStamped>("goal", 1, boost::bind(&MoveBase::goalCB, this, _1));
 
     feedback_distance_pub_ = simple_nh.advertise<move_base_msgs::Feedback>("feedback", 1);
+    if (!private_nh.hasParam("weight_average_velocity_factor")) {
+      ROS_WARN("Parameter weight_average_velocity_factor is not configured");
+      weight_average_velocity_factor_ = 0.985;
+    }
+    private_nh.param("weight_average_velocity_factor", weight_average_velocity_factor_);
+    if (weight_average_velocity_factor_ <= 0.05 && weight_average_velocity_factor_ >= 1.0) {
+      ROS_WARN("Parameter weight_average_velocity_factor should be in range (0,1), close to 1");
+      weight_average_velocity_factor_ = 0.985;
+    }
 
     //we'll assume the radius of the robot to be consistent with what's specified for the costmaps
     private_nh.param("local_costmap/inscribed_radius", inscribed_radius_, 0.325);
@@ -574,26 +583,26 @@ namespace move_base {
     {
       return;
     }
-
     //calculate average velocity
     ros::Time current_time = ros::Time::now();
     double dist = distance_info.second;
-    double average_vel = calculateAverageVelocity(dist, current_time);
+    std::pair<double, double> average_vel = calculateAverageVelocity(dist, current_time);
 
-    //publish feedback
-    move_base_msgs::Feedback msg;
-    msg.dist_to_goal = dist;
-    msg.time_to_goal = prev_feedback_info_.getTime(dist, average_vel);
-    feedback_distance_pub_.publish(msg);
+    //publish feedback after X(5) iterations
+    if (prev_feedback_info_.average_velocity_iteration > 5) {
+      move_base_msgs::Feedback msg;
+      msg.dist_to_goal = dist;
+      msg.time_to_goal = prev_feedback_info_.calculateTimeToGoal(dist, average_vel.second);
+      feedback_distance_pub_.publish(msg);
+    }
 
     //save previous feedback info
-    prev_feedback_info_.time = current_time;
-    prev_feedback_info_.velocity = average_vel;
+    prev_feedback_info_.time_to_goal = current_time;
+    prev_feedback_info_.average_velocity = average_vel.first;
     prev_feedback_info_.dist_to_goal = dist;
   }
 
-  ///calculate distance from closest pose to current position to the goal. 
-  //return pair.The first parameter is status(true/false).The second is a distance.
+  //calculate distance from current position to the goal
   std::pair<bool, double> MoveBase::calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position)
   {
     boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
@@ -617,8 +626,11 @@ namespace move_base {
         min_index = i;
       }
     }
-    //calculate distance from closest pose to current position to the goal. 
-    double dist = 0.0;
+
+    //calculate distance from closest pose to current position to the goal.
+    //take in a account robot position to closest pose, otherwise the distance can be the same
+    //in two iterations. 
+    double dist = distance(current_position, plan[min_index]);
     for(uint32_t idx = min_index; idx < plan.size() - 1; ++idx)
     {
       dist += distance(plan[idx], plan[idx + 1]);
@@ -627,26 +639,27 @@ namespace move_base {
     return std::make_pair(true, dist);
   }
 
-  //the calculation based on "exponentially weighted moving average" (EWMA).
-  //average velocity = factor * previous average velocity + (1-factor) * current velocity
-  //factor between (0,1)
-  double MoveBase::calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
+  //The average velocity calculation, based on "exponentially weighted moving average"(EWMA)
+  //with bios_correction.
+   //average velocity = factor * previous average velocity + (1-factor) * current velocity/bios_correction
+  //The return value is a pair<average_vel, average_vel / bios_correction>
+  std::pair<double, double> MoveBase::calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
   {
-    double average_vel = FeedbackInfo::MIN_VELOCITY;
-
-    if(prev_feedback_info_.is_set)
-    {
-      ros::Duration dtime = current_time - prev_feedback_info_.time;
-      double current_velocity = (prev_feedback_info_.dist_to_goal - dist_to_goal)/dtime.toSec();
-      average_vel = FeedbackInfo::WEIGHT_AVERAGE_VELOCITY_FACTOR * prev_feedback_info_.velocity +
-                         (1- FeedbackInfo::WEIGHT_AVERAGE_VELOCITY_FACTOR) * current_velocity;
+    ++prev_feedback_info_.average_velocity_iteration;
+    //if it is a new plan the feedback should be cleared
+    if (prev_feedback_info_.isNewPlan(dist_to_goal)){
+      prev_feedback_info_.clear();
+      return std::make_pair(prev_feedback_info_.average_velocity, prev_feedback_info_.average_velocity);
     }
-    else
-    {
-      prev_feedback_info_.is_set = true;
-    }
+    //calculate current velocity based on delta to goal distance and time
+    ros::Duration dtime = current_time - prev_feedback_info_.time_to_goal;
+    double current_velocity = (prev_feedback_info_.dist_to_goal - dist_to_goal)/dtime.toSec();
+    //use EWMA
+    double average_vel = weight_average_velocity_factor_ * prev_feedback_info_.average_velocity +
+                         (1- weight_average_velocity_factor_) * current_velocity;
+    double bios_correction = (1.0 - std::pow(weight_average_velocity_factor_, prev_feedback_info_.average_velocity_iteration));
 
-    return average_vel;
+    return std::make_pair(average_vel, average_vel / bios_correction);
   }
 
   void MoveBase::wakePlanner(const ros::TimerEvent& event)

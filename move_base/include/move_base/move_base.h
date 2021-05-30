@@ -86,30 +86,42 @@ namespace move_base {
 
       void clear()
       {
-        velocity = MIN_VELOCITY;
-        is_set = false;
+        dist_to_goal = 0.0;
+        average_velocity = MIN_VELOCITY;
+        time_to_goal = ros::Time(0, 0);
+        average_velocity_iteration = 0;
       }
 
-      double getTime(double distance, double velocity)
+      double calculateTimeToGoal(double distance, double velocity)
       {
         double epsilon = 0.01;
-        if(fabs(velocity - 0.0) < epsilon)
-        {
-          velocity = MIN_VELOCITY;
+        if (fabs(velocity - 0.0) < epsilon) {
+          return NAN;
         }
-
-        return fabs(distance/velocity);
+        else {
+          return fabs(distance/velocity);
+        }
       }
 
+      //it's on startup or local planner got a new plan
+      bool isNewPlan(double current_dist_to_goal)
+	  {
+        if ((time_to_goal == ros::Time(0,0)) || 
+          fabs(current_dist_to_goal - dist_to_goal) > 0.5) {
+          return true;
+        }
+        else {
+          return false;
+		}
+	  }
+
       double dist_to_goal;
-      double velocity;
-      ros::Time time;
-      bool is_set;
-      //the value between(0,1)
-      static constexpr double WEIGHT_AVERAGE_VELOCITY_FACTOR = 0.9;
+      double average_velocity;
+      ros::Time time_to_goal;
+      uint32_t average_velocity_iteration;
       static constexpr double MIN_VELOCITY = 0.3;
   };
-
+  
   /**
    * @class MoveBase
    * @brief A class that uses the actionlib::ActionServer interface that moves the robot base to a goal location.
@@ -206,7 +218,7 @@ namespace move_base {
 
       void publishFeedback(const geometry_msgs::PoseStamped& current_position);
 
-      double calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time);
+      std::pair<double, double> calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time);
 
       std::pair<bool, double> calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position);
 
@@ -230,6 +242,7 @@ namespace move_base {
       unsigned int recovery_index_;
 
       FeedbackInfo prev_feedback_info_;
+      double weight_average_velocity_factor_;
 
       geometry_msgs::PoseStamped global_pose_;
       double planner_frequency_, controller_frequency_, inscribed_radius_, circumscribed_radius_;
