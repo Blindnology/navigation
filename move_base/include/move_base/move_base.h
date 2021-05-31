@@ -88,7 +88,7 @@ namespace move_base {
       {
         dist_to_goal = 0.0;
         average_velocity = 0.0;
-        average_velocity_bios_correction = 0.0;
+        average_velocity_bias_correction = 0.0;
         prev_time = ros::Time(0, 0);
         average_velocity_iteration = 0;
       }
@@ -96,17 +96,17 @@ namespace move_base {
       double calculateTimeToGoal(double distance)
       {
         double epsilon = 0.01;
-        if (fabs(average_velocity_bios_correction - 0.0) < epsilon) {
+        if (fabs(average_velocity_bias_correction - 0.0) < epsilon) {
           return NAN;
         }
         else {
-          return fabs(distance/average_velocity_bios_correction);
+          return fabs(distance/average_velocity_bias_correction);
         }
       }
 
       double dist_to_goal;
       double average_velocity;
-      double average_velocity_bios_correction;
+      double average_velocity_bias_correction;
       ros::Time prev_time;
       uint32_t average_velocity_iteration;
   };

@@ -619,9 +619,7 @@ namespace move_base {
     }
 
     //calculate distance from closest pose to current position to the goal.
-    //take in a account robot position to closest pose, otherwise the distance can be the same
-    //in two iterations. 
-    double dist = distance(current_position, plan[min_index]);
+    double dist = 0.0;
     for(uint32_t idx = min_index; idx < plan.size() - 1; ++idx)
     {
       dist += distance(plan[idx], plan[idx + 1]);
@@ -631,7 +629,7 @@ namespace move_base {
   }
 
   //The average velocity calculation, based on "exponentially weighted moving average"(EWMA)
-  //with bios_correction.
+  //with bias_correction.
   void MoveBase::calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
   {
     ++prev_feedback_info_.average_velocity_iteration;
@@ -644,7 +642,7 @@ namespace move_base {
                          current_velocity * (1- weight_average_velocity_factor_);
     double bios_correction = (1.0 - std::pow(weight_average_velocity_factor_, prev_feedback_info_.average_velocity_iteration));
 
-    prev_feedback_info_.average_velocity_bios_correction = prev_feedback_info_.average_velocity / bios_correction;
+    prev_feedback_info_.average_velocity_bias_correction = prev_feedback_info_.average_velocity / bios_correction;
 
   }
 
