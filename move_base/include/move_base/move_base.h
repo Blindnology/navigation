@@ -87,41 +87,29 @@ namespace move_base {
       void clear()
       {
         dist_to_goal = 0.0;
-        average_velocity = MIN_VELOCITY;
-        time_to_goal = ros::Time(0, 0);
+        average_velocity = 0.0;
+        average_velocity_bios_correction = 0.0;
+        prev_time = ros::Time(0, 0);
         average_velocity_iteration = 0;
       }
 
-      double calculateTimeToGoal(double distance, double velocity)
+      double calculateTimeToGoal(double distance)
       {
         double epsilon = 0.01;
-        if (fabs(velocity - 0.0) < epsilon) {
+        if (fabs(average_velocity_bios_correction - 0.0) < epsilon) {
           return NAN;
         }
         else {
-          return fabs(distance/velocity);
+          return fabs(distance/average_velocity_bios_correction);
         }
       }
 
-      //it's on startup or local planner got a new plan
-      bool isNewPlan(double current_dist_to_goal)
-	  {
-        if ((time_to_goal == ros::Time(0,0)) || 
-          fabs(current_dist_to_goal - dist_to_goal) > 0.5) {
-          return true;
-        }
-        else {
-          return false;
-		}
-	  }
-
       double dist_to_goal;
       double average_velocity;
-      ros::Time time_to_goal;
+      double average_velocity_bios_correction;
+      ros::Time prev_time;
       uint32_t average_velocity_iteration;
-      static constexpr double MIN_VELOCITY = 0.3;
   };
-  
   /**
    * @class MoveBase
    * @brief A class that uses the actionlib::ActionServer interface that moves the robot base to a goal location.
@@ -218,7 +206,7 @@ namespace move_base {
 
       void publishFeedback(const geometry_msgs::PoseStamped& current_position);
 
-      std::pair<double, double> calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time);
+      void calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time);
 
       std::pair<bool, double> calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position);
 

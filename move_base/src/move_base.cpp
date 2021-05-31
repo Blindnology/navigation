@@ -110,15 +110,7 @@ namespace move_base {
     goal_sub_ = simple_nh.subscribe<geometry_msgs::PoseStamped>("goal", 1, boost::bind(&MoveBase::goalCB, this, _1));
 
     feedback_distance_pub_ = simple_nh.advertise<move_base_msgs::Feedback>("feedback", 1);
-    if (!private_nh.hasParam("weight_average_velocity_factor")) {
-      ROS_WARN("Parameter weight_average_velocity_factor is not configured");
-      weight_average_velocity_factor_ = 0.985;
-    }
-    private_nh.param("weight_average_velocity_factor", weight_average_velocity_factor_);
-    if (weight_average_velocity_factor_ <= 0.05 && weight_average_velocity_factor_ >= 1.0) {
-      ROS_WARN("Parameter weight_average_velocity_factor should be in range (0,1), close to 1");
-      weight_average_velocity_factor_ = 0.985;
-    }
+    private_nh.param("weight_average_velocity_factor", weight_average_velocity_factor_, 0.985);
 
     //we'll assume the radius of the robot to be consistent with what's specified for the costmaps
     private_nh.param("local_costmap/inscribed_radius", inscribed_radius_, 0.325);
@@ -586,19 +578,18 @@ namespace move_base {
     //calculate average velocity
     ros::Time current_time = ros::Time::now();
     double dist = distance_info.second;
-    std::pair<double, double> average_vel = calculateAverageVelocity(dist, current_time);
+    calculateAverageVelocity(dist, current_time);
 
-    //publish feedback after X(5) iterations
-    if (prev_feedback_info_.average_velocity_iteration > 5) {
+    //publish feedback after X(30) iterations
+    if (prev_feedback_info_.average_velocity_iteration > 30) {
       move_base_msgs::Feedback msg;
       msg.dist_to_goal = dist;
-      msg.time_to_goal = prev_feedback_info_.calculateTimeToGoal(dist, average_vel.second);
+      msg.time_to_goal = prev_feedback_info_.calculateTimeToGoal(dist);
       feedback_distance_pub_.publish(msg);
     }
 
     //save previous feedback info
-    prev_feedback_info_.time_to_goal = current_time;
-    prev_feedback_info_.average_velocity = average_vel.first;
+    prev_feedback_info_.prev_time = current_time;
     prev_feedback_info_.dist_to_goal = dist;
   }
 
@@ -641,25 +632,20 @@ namespace move_base {
 
   //The average velocity calculation, based on "exponentially weighted moving average"(EWMA)
   //with bios_correction.
-   //average velocity = factor * previous average velocity + (1-factor) * current velocity/bios_correction
-  //The return value is a pair<average_vel, average_vel / bios_correction>
-  std::pair<double, double> MoveBase::calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
+  void MoveBase::calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
   {
     ++prev_feedback_info_.average_velocity_iteration;
-    //if it is a new plan the feedback should be cleared
-    if (prev_feedback_info_.isNewPlan(dist_to_goal)){
-      prev_feedback_info_.clear();
-      return std::make_pair(prev_feedback_info_.average_velocity, prev_feedback_info_.average_velocity);
-    }
+    
     //calculate current velocity based on delta to goal distance and time
-    ros::Duration dtime = current_time - prev_feedback_info_.time_to_goal;
+    ros::Duration dtime = current_time - prev_feedback_info_.prev_time;
     double current_velocity = (prev_feedback_info_.dist_to_goal - dist_to_goal)/dtime.toSec();
     //use EWMA
-    double average_vel = weight_average_velocity_factor_ * prev_feedback_info_.average_velocity +
-                         (1- weight_average_velocity_factor_) * current_velocity;
+    prev_feedback_info_.average_velocity = weight_average_velocity_factor_ * prev_feedback_info_.average_velocity +
+                         current_velocity * (1- weight_average_velocity_factor_);
     double bios_correction = (1.0 - std::pow(weight_average_velocity_factor_, prev_feedback_info_.average_velocity_iteration));
 
-    return std::make_pair(average_vel, average_vel / bios_correction);
+    prev_feedback_info_.average_velocity_bios_correction = prev_feedback_info_.average_velocity / bios_correction;
+
   }
 
   void MoveBase::wakePlanner(const ros::TimerEvent& event)
@@ -943,7 +929,8 @@ namespace move_base {
       new_global_plan_ = false;
 
       ROS_DEBUG_NAMED("move_base","Got a new plan...swap pointers");
-
+      //clean previous feedback.
+      prev_feedback_info_.clear();
       //do a pointer swap under mutex
       std::vector<geometry_msgs::PoseStamped>* temp_plan = controller_plan_;
 
