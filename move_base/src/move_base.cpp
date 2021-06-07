@@ -110,7 +110,7 @@ namespace move_base {
     goal_sub_ = simple_nh.subscribe<geometry_msgs::PoseStamped>("goal", 1, boost::bind(&MoveBase::goalCB, this, _1));
 
     feedback_distance_pub_ = simple_nh.advertise<move_base_msgs::Feedback>("feedback", 1);
-    private_nh.param("weight_average_velocity_factor", weight_average_velocity_factor_, 0.985);
+    private_nh.param("weight_average_velocity_factor", feedback_info_.weight_average_velocity_factor_, 0.985);
 
     //we'll assume the radius of the robot to be consistent with what's specified for the costmaps
     private_nh.param("local_costmap/inscribed_radius", inscribed_radius_, 0.325);
@@ -570,39 +570,39 @@ namespace move_base {
   void MoveBase::publishFeedback(const geometry_msgs::PoseStamped& current_position)
   {
     //calculate distance to goal from current position
-    std::pair<bool, double> distance_info = calculateDistanceToGoal(current_position);
+    std::pair<bool, double> distance_info = calculateGlobalPlanDistToGoal(current_position);
     if(!distance_info.first)
     {
       return;
     }
-    //calculate average velocity
+    //calculate average velocity through global path.
     ros::Time current_time = ros::Time::now();
     double dist = distance_info.second;
-    calculateAverageVelocity(dist, current_time);
+    feedback_info_.calculateAverageVelocity(dist, current_time);
 
     //publish feedback after X(30) iterations
-    if (prev_feedback_info_.average_velocity_iteration > 30) {
+    if (feedback_info_.average_velocity_iteration_ > 30) {
       move_base_msgs::Feedback msg;
       msg.dist_to_goal = dist;
-      msg.time_to_goal = prev_feedback_info_.calculateTimeToGoal(dist);
+      msg.time_to_goal = feedback_info_.calculateTimeToGoal(dist);
       feedback_distance_pub_.publish(msg);
     }
 
-    //save previous feedback info
-    prev_feedback_info_.prev_time = current_time;
-    prev_feedback_info_.dist_to_goal = dist;
+    //save feedback info
+    feedback_info_.prev_time_ = current_time;
+    feedback_info_.prev_dist_to_goal_ = dist;
   }
 
-  //calculate distance from current position to the goal
-  std::pair<bool, double> MoveBase::calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position)
+  //calculate distance along the global path from current position to the goal
+  std::pair<bool, double> MoveBase::calculateGlobalPlanDistToGoal(const geometry_msgs::PoseStamped& current_position)
   {
     boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
-    if(latest_plan_->empty())
+    if(controller_plan_->empty())
     {
       return std::make_pair(false, 0.0);
     }
     std::vector<geometry_msgs::PoseStamped> plan;
-    plan = *latest_plan_;
+    plan = *controller_plan_;
     lock.unlock();
     //find the closest pose to current position, based on straigth line distance.
     uint32_t min_index = 0;
@@ -626,24 +626,6 @@ namespace move_base {
     }
 
     return std::make_pair(true, dist);
-  }
-
-  //The average velocity calculation, based on "exponentially weighted moving average"(EWMA)
-  //with bias_correction.
-  void MoveBase::calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
-  {
-    ++prev_feedback_info_.average_velocity_iteration;
-    
-    //calculate current velocity based on delta to goal distance and time
-    ros::Duration dtime = current_time - prev_feedback_info_.prev_time;
-    double current_velocity = (prev_feedback_info_.dist_to_goal - dist_to_goal)/dtime.toSec();
-    //use EWMA
-    prev_feedback_info_.average_velocity = weight_average_velocity_factor_ * prev_feedback_info_.average_velocity +
-                         current_velocity * (1- weight_average_velocity_factor_);
-    double bios_correction = (1.0 - std::pow(weight_average_velocity_factor_, prev_feedback_info_.average_velocity_iteration));
-
-    prev_feedback_info_.average_velocity_bias_correction = prev_feedback_info_.average_velocity / bios_correction;
-
   }
 
   void MoveBase::wakePlanner(const ros::TimerEvent& event)
@@ -927,8 +909,8 @@ namespace move_base {
       new_global_plan_ = false;
 
       ROS_DEBUG_NAMED("move_base","Got a new plan...swap pointers");
-      //clean previous feedback.
-      prev_feedback_info_.clear();
+      //clean feedback
+      feedback_info_.clear();
       //do a pointer swap under mutex
       std::vector<geometry_msgs::PoseStamped>* temp_plan = controller_plan_;
 
@@ -1252,8 +1234,8 @@ namespace move_base {
       controller_costmap_ros_->stop();
     }
 
-    //clean previous feedback.
-    prev_feedback_info_.clear();
+    //clean feedback
+    feedback_info_.clear();
   }
 
   bool MoveBase::getRobotPose(geometry_msgs::PoseStamped& global_pose, costmap_2d::Costmap2DROS* costmap)

@@ -86,30 +86,51 @@ namespace move_base {
 
       void clear()
       {
-        dist_to_goal = 0.0;
-        average_velocity = 0.0;
-        average_velocity_bias_correction = 0.0;
-        prev_time = ros::Time(0, 0);
-        average_velocity_iteration = 0;
+        prev_dist_to_goal_ = 0.0;
+        average_velocity_ = 0.0;
+        average_velocity_bias_correction_ = 0.0;
+        prev_time_ = ros::Time(0, 0);
+        average_velocity_iteration_ = 0;
       }
 
       double calculateTimeToGoal(double distance)
       {
         double epsilon = 0.01;
-        if (fabs(average_velocity_bias_correction - 0.0) < epsilon) {
+        if (average_velocity_bias_correction_ < epsilon) {
           return NAN;
         }
         else {
-          return fabs(distance/average_velocity_bias_correction);
+          return (distance/average_velocity_bias_correction_);
         }
       }
+      
+      //The average velocity calculation through global path, based on "exponentially weighted moving average"(EWMA)
+      //with bias_correction.
+      void calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
+      {
+        ++average_velocity_iteration_;
 
-      double dist_to_goal;
-      double average_velocity;
-      double average_velocity_bias_correction;
-      ros::Time prev_time;
-      uint32_t average_velocity_iteration;
+        //calculate current velocity based on delta to goal distance and time
+        ros::Duration dtime = current_time - prev_time_;
+        double current_velocity = (prev_dist_to_goal_ - dist_to_goal)/dtime.toSec();
+        //use EWMA
+        average_velocity_ = weight_average_velocity_factor_ * average_velocity_ +
+                         current_velocity * (1- weight_average_velocity_factor_);
+        double bias_correction = (1.0 - std::pow(weight_average_velocity_factor_, average_velocity_iteration_));
+
+        average_velocity_bias_correction_ = average_velocity_ / bias_correction;
+
+     }
+
+      double prev_dist_to_goal_;
+      double average_velocity_;
+      double average_velocity_bias_correction_;
+      ros::Time prev_time_;
+      uint32_t average_velocity_iteration_;
+      double weight_average_velocity_factor_;
+
   };
+
   /**
    * @class MoveBase
    * @brief A class that uses the actionlib::ActionServer interface that moves the robot base to a goal location.
@@ -206,9 +227,7 @@ namespace move_base {
 
       void publishFeedback(const geometry_msgs::PoseStamped& current_position);
 
-      void calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time);
-
-      std::pair<bool, double> calculateDistanceToGoal(const geometry_msgs::PoseStamped& current_position);
+      std::pair<bool, double> calculateGlobalPlanDistToGoal(const geometry_msgs::PoseStamped& current_position);
 
       /**
        * @brief This is used to wake the planner at periodic intervals.
@@ -229,8 +248,7 @@ namespace move_base {
       std::vector<std::string> recovery_behavior_names_;
       unsigned int recovery_index_;
 
-      FeedbackInfo prev_feedback_info_;
-      double weight_average_velocity_factor_;
+      FeedbackInfo feedback_info_;
 
       geometry_msgs::PoseStamped global_pose_;
       double planner_frequency_, controller_frequency_, inscribed_radius_, circumscribed_radius_;
