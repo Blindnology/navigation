@@ -76,6 +76,7 @@ namespace move_base {
     OSCILLATION_R
   };
 
+
   //Used to calculate distance, time and average velocity
   struct FeedbackInfo
   {
@@ -103,7 +104,7 @@ namespace move_base {
           return (distance/average_velocity_bias_correction_);
         }
       }
-      
+
       //The average velocity calculation through global path, based on "exponentially weighted moving average"(EWMA)
       //with bias_correction.
       void calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
@@ -120,7 +121,7 @@ namespace move_base {
 
         average_velocity_bias_correction_ = average_velocity_ / bias_correction;
 
-     }
+      }
 
       double prev_dist_to_goal_;
       double average_velocity_;
@@ -128,8 +129,8 @@ namespace move_base {
       ros::Time prev_time_;
       uint32_t average_velocity_iteration_;
       double weight_average_velocity_factor_;
-
   };
+
 
   /**
    * @class MoveBase
