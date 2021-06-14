@@ -80,55 +80,55 @@ namespace move_base {
   //Used to calculate distance, time and average velocity
   struct FeedbackInfo
   {
-      FeedbackInfo()
-      {
-        clear();
+    FeedbackInfo()
+    {
+      clear();
+    }
+
+    void clear()
+    {
+      prev_dist_to_goal_ = 0.0;
+      average_velocity_ = 0.0;
+      average_velocity_bias_correction_ = 0.0;
+      prev_time_ = ros::Time(0, 0);
+      average_velocity_iteration_ = 0;
+    }
+
+    double calculateTimeToGoal(double distance)
+    {
+      double epsilon = 0.01;
+      if (average_velocity_bias_correction_ < epsilon) {
+        return NAN;
       }
-
-      void clear()
-      {
-        prev_dist_to_goal_ = 0.0;
-        average_velocity_ = 0.0;
-        average_velocity_bias_correction_ = 0.0;
-        prev_time_ = ros::Time(0, 0);
-        average_velocity_iteration_ = 0;
+      else {
+        return (distance/average_velocity_bias_correction_);
       }
+    }
 
-      double calculateTimeToGoal(double distance)
-      {
-        double epsilon = 0.01;
-        if (average_velocity_bias_correction_ < epsilon) {
-          return NAN;
-        }
-        else {
-          return (distance/average_velocity_bias_correction_);
-        }
-      }
+    //The average velocity calculation through global path, based on "exponentially weighted moving average"(EWMA)
+    //with bias_correction.
+    void calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
+    {
+      ++average_velocity_iteration_;
 
-      //The average velocity calculation through global path, based on "exponentially weighted moving average"(EWMA)
-      //with bias_correction.
-      void calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
-      {
-        ++average_velocity_iteration_;
-
-        //calculate current velocity based on delta to goal distance and time
-        ros::Duration dtime = current_time - prev_time_;
-        double current_velocity = (prev_dist_to_goal_ - dist_to_goal)/dtime.toSec();
-        //use EWMA
-        average_velocity_ = weight_average_velocity_factor_ * average_velocity_ +
+      //calculate current velocity based on delta to goal distance and time
+      ros::Duration dtime = current_time - prev_time_;
+      double current_velocity = (prev_dist_to_goal_ - dist_to_goal)/dtime.toSec();
+      //use EWMA
+      average_velocity_ = weight_average_velocity_factor_ * average_velocity_ +
                          current_velocity * (1- weight_average_velocity_factor_);
-        double bias_correction = (1.0 - std::pow(weight_average_velocity_factor_, average_velocity_iteration_));
+      double bias_correction = (1.0 - std::pow(weight_average_velocity_factor_, average_velocity_iteration_));
 
-        average_velocity_bias_correction_ = average_velocity_ / bias_correction;
+      average_velocity_bias_correction_ = average_velocity_ / bias_correction;
 
-      }
+    }
 
-      double prev_dist_to_goal_;
-      double average_velocity_;
-      double average_velocity_bias_correction_;
-      ros::Time prev_time_;
-      uint32_t average_velocity_iteration_;
-      double weight_average_velocity_factor_;
+    double prev_dist_to_goal_;
+    double average_velocity_;
+    double average_velocity_bias_correction_;
+    ros::Time prev_time_;
+    uint32_t average_velocity_iteration_;
+    double weight_average_velocity_factor_;
   };
 
 
