@@ -76,6 +76,62 @@ namespace move_base {
     OSCILLATION_R
   };
 
+
+  //Used to calculate distance, time and average velocity
+  struct FeedbackInfo
+  {
+    FeedbackInfo()
+    {
+      clear();
+    }
+
+    void clear()
+    {
+      prev_dist_to_goal_ = 0.0;
+      average_velocity_ = 0.0;
+      average_velocity_bias_correction_ = 0.0;
+      prev_time_ = ros::Time(0, 0);
+      average_velocity_iteration_ = 0;
+    }
+
+    double calculateTimeToGoal(double distance)
+    {
+      double epsilon = 0.01;
+      if (average_velocity_bias_correction_ < epsilon) {
+        return NAN;
+      }
+      else {
+        return (distance/average_velocity_bias_correction_);
+      }
+    }
+
+    //The average velocity calculation through global path, based on "exponentially weighted moving average"(EWMA)
+    //with bias_correction.
+    void calculateAverageVelocity(double dist_to_goal, const ros::Time& current_time)
+    {
+      ++average_velocity_iteration_;
+
+      //calculate current velocity based on delta to goal distance and time
+      ros::Duration dtime = current_time - prev_time_;
+      double current_velocity = (prev_dist_to_goal_ - dist_to_goal)/dtime.toSec();
+      //use EWMA
+      average_velocity_ = weight_average_velocity_factor_ * average_velocity_ +
+                         current_velocity * (1- weight_average_velocity_factor_);
+      double bias_correction = (1.0 - std::pow(weight_average_velocity_factor_, average_velocity_iteration_));
+
+      average_velocity_bias_correction_ = average_velocity_ / bias_correction;
+
+    }
+
+    double prev_dist_to_goal_;
+    double average_velocity_;
+    double average_velocity_bias_correction_;
+    ros::Time prev_time_;
+    uint32_t average_velocity_iteration_;
+    double weight_average_velocity_factor_;
+  };
+
+
   /**
    * @class MoveBase
    * @brief A class that uses the actionlib::ActionServer interface that moves the robot base to a goal location.
@@ -170,6 +226,10 @@ namespace move_base {
 
       geometry_msgs::PoseStamped goalToGlobalFrame(const geometry_msgs::PoseStamped& goal_pose_msg);
 
+      void publishFeedback(const geometry_msgs::PoseStamped& current_position);
+
+      std::pair<bool, double> calculateGlobalPlanDistToGoal(const geometry_msgs::PoseStamped& current_position);
+
       /**
        * @brief This is used to wake the planner at periodic intervals.
        */
@@ -189,13 +249,15 @@ namespace move_base {
       std::vector<std::string> recovery_behavior_names_;
       unsigned int recovery_index_;
 
+      FeedbackInfo feedback_info_;
+
       geometry_msgs::PoseStamped global_pose_;
       double planner_frequency_, controller_frequency_, inscribed_radius_, circumscribed_radius_;
       double planner_patience_, controller_patience_;
       int32_t max_planning_retries_;
       uint32_t planning_retries_;
       double conservative_reset_dist_, clearing_radius_;
-      ros::Publisher current_goal_pub_, vel_pub_, action_goal_pub_, recovery_status_pub_;
+      ros::Publisher current_goal_pub_, vel_pub_, action_goal_pub_, recovery_status_pub_, feedback_distance_pub_;
       ros::Subscriber goal_sub_;
       ros::ServiceServer make_plan_srv_, clear_costmaps_srv_;
       bool shutdown_costmaps_, clearing_rotation_allowed_, recovery_behavior_enabled_;

@@ -37,7 +37,10 @@
 *********************************************************************/
 #include <move_base/move_base.h>
 #include <move_base_msgs/RecoveryStatus.h>
+#include <move_base_msgs/Feedback.h>
 #include <cmath>
+
+#include <numeric>
 
 #include <boost/algorithm/string.hpp>
 #include <boost/thread.hpp>
@@ -105,6 +108,9 @@ namespace move_base {
     //like nav_view and rviz
     ros::NodeHandle simple_nh("move_base_simple");
     goal_sub_ = simple_nh.subscribe<geometry_msgs::PoseStamped>("goal", 1, boost::bind(&MoveBase::goalCB, this, _1));
+
+    feedback_distance_pub_ = simple_nh.advertise<move_base_msgs::Feedback>("feedback", 1);
+    private_nh.param("weight_average_velocity_factor", feedback_info_.weight_average_velocity_factor_, 0.985);
 
     //we'll assume the radius of the robot to be consistent with what's specified for the costmaps
     private_nh.param("local_costmap/inscribed_radius", inscribed_radius_, 0.325);
@@ -560,6 +566,68 @@ namespace move_base {
     return global_pose;
   }
 
+  //publish feedback based on latest_plan.Called in context of executeCycle.
+  void MoveBase::publishFeedback(const geometry_msgs::PoseStamped& current_position)
+  {
+    //calculate distance to goal from current position
+    std::pair<bool, double> distance_info = calculateGlobalPlanDistToGoal(current_position);
+    if(!distance_info.first)
+    {
+      return;
+    }
+    //calculate average velocity through global path.
+    ros::Time current_time = ros::Time::now();
+    double dist = distance_info.second;
+    feedback_info_.calculateAverageVelocity(dist, current_time);
+
+    //publish feedback after X(30) iterations
+    if (feedback_info_.average_velocity_iteration_ > 30) {
+      move_base_msgs::Feedback msg;
+      msg.dist_to_goal = dist;
+      msg.time_to_goal = feedback_info_.calculateTimeToGoal(dist);
+      feedback_distance_pub_.publish(msg);
+    }
+
+    //save feedback info
+    feedback_info_.prev_time_ = current_time;
+    feedback_info_.prev_dist_to_goal_ = dist;
+  }
+
+  //calculate distance along the global path from current position to the goal
+  std::pair<bool, double> MoveBase::calculateGlobalPlanDistToGoal(const geometry_msgs::PoseStamped& current_position)
+  {
+    boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
+    if(controller_plan_->empty())
+    {
+      return std::make_pair(false, 0.0);
+    }
+    std::vector<geometry_msgs::PoseStamped> plan;
+    plan = *controller_plan_;
+    lock.unlock();
+    //find the closest pose to current position, based on straigth line distance.
+    uint32_t min_index = 0;
+    double min_distance = distance(plan[0], current_position);
+    
+    for(uint32_t i = 1; i < plan.size(); ++i)
+    {
+      double current_distance = distance(plan[i], current_position);
+      if(current_distance < min_distance)
+      {
+        min_distance = current_distance;
+        min_index = i;
+      }
+    }
+
+    //calculate distance from closest pose to current position to the goal.
+    double dist = 0.0;
+    for(uint32_t idx = min_index; idx < plan.size() - 1; ++idx)
+    {
+      dist += distance(plan[idx], plan[idx + 1]);
+    }
+
+    return std::make_pair(true, dist);
+  }
+
   void MoveBase::wakePlanner(const ros::TimerEvent& event)
   {
     // we have slept long enough for rate
@@ -814,6 +882,8 @@ namespace move_base {
     move_base_msgs::MoveBaseFeedback feedback;
     feedback.base_position = current_position;
     as_->publishFeedback(feedback);
+    //publish feedback
+    publishFeedback(current_position);
 
     //check to see if we've moved far enough to reset our oscillation timeout
     if(distance(current_position, oscillation_pose_) >= oscillation_distance_)
@@ -839,7 +909,8 @@ namespace move_base {
       new_global_plan_ = false;
 
       ROS_DEBUG_NAMED("move_base","Got a new plan...swap pointers");
-
+      //clean feedback
+      feedback_info_.clear();
       //do a pointer swap under mutex
       std::vector<geometry_msgs::PoseStamped>* temp_plan = controller_plan_;
 
@@ -1162,6 +1233,9 @@ namespace move_base {
       planner_costmap_ros_->stop();
       controller_costmap_ros_->stop();
     }
+
+    //clean feedback
+    feedback_info_.clear();
   }
 
   bool MoveBase::getRobotPose(geometry_msgs::PoseStamped& global_pose, costmap_2d::Costmap2DROS* costmap)
